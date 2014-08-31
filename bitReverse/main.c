@@ -50,6 +50,7 @@ int	main(void)
 {
 	clock_t start, end;
 	double time_elapsed; 
+	double bandwidth;
 
 	unsigned int uintCount = 400000000;
 	unsigned int i;
@@ -84,28 +85,30 @@ int	main(void)
 	printf("Time to get %u random integers & zero 2x integers = %lfs\n", uintCount, time_elapsed);
 
 	start = clock();
-	reverse32Bit_AVX(destUIntArrayAVX, srcUIntArray, uintCount);
-	end = clock();
-	time_elapsed = (end-start)/(double)CLOCKS_PER_SEC;
-	printf("Time to get %u integers reverse by AVX = %lfs\n", uintCount, time_elapsed);
-/*
-	start = clock();
-	reverse32Bit_AVX2(destUIntArrayAVX2, srcUIntArray, uintCount);
-	end = clock();
-	time_elapsed = (end-start)/(double)CLOCKS_PER_SEC;
-	printf("Time to get %u integers reverse by AVX2 = %lfs\n", uintCount, time_elapsed);
-*/
-	start = clock();
 	for ( i = 0; i < uintCount; i++ )
 		destUIntArray[i] = bitrev2(srcUIntArray[i]);
 	end = clock();
 	time_elapsed = (end-start)/(double)CLOCKS_PER_SEC;
-	printf("Time to get %u integers reverse by ByteLUT = %lfs\n", uintCount, time_elapsed);
+	bandwidth = (double)(uintCount*sizeof(unsigned int)*2) / time_elapsed / 1.0e9;
+	printf("Time to get %u integers reverse by ByteLUT = %lfs, %lfGB/s\n", uintCount, time_elapsed, bandwidth);
+
+	start = clock();
+	reverse32Bit_AVX(destUIntArrayAVX, srcUIntArray, uintCount);
+	end = clock();
+	time_elapsed = (end-start)/(double)CLOCKS_PER_SEC;
+	bandwidth = (double)(uintCount*sizeof(unsigned int)*2) / time_elapsed / 1.0e9;
+	printf("Time to get %u integers reverse by AVX = %lfs, %lfGB/s\n", uintCount, time_elapsed, bandwidth);
+
+	start = clock();
+	reverse32Bit_AVX2(destUIntArrayAVX2, srcUIntArray, uintCount);
+	end = clock();
+	time_elapsed = (end-start)/(double)CLOCKS_PER_SEC;
+	printf("Time to get %u integers reverse by AVX2 = %lfs, %lfGB/s\n", uintCount, time_elapsed, bandwidth);
 
 	start = clock();
 	for ( i = 0; i < uintCount; i++ )
-		if ( destUIntArray[i]!=destUIntArrayAVX[i] )
-			printf("Inconsistency of rev(0x%.8x) -> 0x%.8x (0x%.8x)\n", srcUIntArray[i], destUIntArrayAVX[i], destUIntArray[i]);
+		if ( destUIntArray[i]!=destUIntArrayAVX2[i] )
+			printf("Inconsistency [%u] of rev(0x%.8x) -> 0x%.8x (0x%.8x)\n", i, srcUIntArray[i], destUIntArrayAVX2[i], destUIntArray[i]);
 	end = clock();
 	time_elapsed = (end-start)/(double)CLOCKS_PER_SEC;
 	printf("Time to compare %u integers reverse result = %lfs\n", uintCount, time_elapsed);

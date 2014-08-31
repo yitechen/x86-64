@@ -5,306 +5,281 @@
 	.type	reverse32Bit_AVX, %function
 	/*
 		void	reverse32Bit_AVX(unsigned int* dest, const unsigned int* src, const unsigned int integerCount)
+
+		8int/5cycle sustained without actual memory performance issue
+		on i7-4930K@3.9GHz, 4e8 integers takes 0.20sec, ~=16GB/s
 	*/
 reverse32Bit_AVX:
 	prefetchnta	(%rsi)
-	lea		shuffleIndex(%rip), %r8
+	lea		lowNibbleShuffle(%rip), %r8
 	test	%rdx, %rdx
 	je,pn	0f
 
 	prefetchnta	64(%rsi)
-	vmovdqa		(%r8), %xmm10			/*	xmm10 = {0x06^8, 0x07^8}	*/
-	vmovdqa		16(%r8), %xmm11			/*	xmm11 = {0x04^8, 0x05^8}	*/
-
-	/*	3cycle stall	*/
-	vpshufd		$0xaa, %xmm11, %xmm14	/*	xmm14 = {0x04^16}	*/
-	vmovdqa	32(%r8), %xmm15				/*	xmm15 = {0x0102040810204080^2}	*/
+	vmovdqa		(%r8), %xmm12			/*	xmm12 = low nibble shuffle	*/
+	vmovdqa		16(%r8), %xmm13			/*	xmm13 = high nibble shuffle	*/
 	mov		%rdx, %rcx
 
-	vpsubb		%xmm14, %xmm10, %xmm8	/*	xmm8 = {0x02^8, 0x03^8}	*/
-	vpsubb		%xmm14, %xmm11, %xmm9	/*	xmm9 = {0x00^8, 0x01^8}	*/
-	shr		$1, %rcx
-	je,pn	1f
+	vmovdqa		32(%r8), %xmm14			/*	xmm14 = low nibble mask	*/
+	vmovdqa		48(%r8), %xmm15			/*	xmm15 = byte swap shuffle	*/
+	and		$7, %rdx
 
-	vmovq	(%rsi), %xmm12				/*	load 1st pair	*/
-	add		$8, %rsi
-	/*	3cycle stall	*/
-	vpshufb		%xmm8, %xmm12, %xmm0
-	vpshufb		%xmm9, %xmm12, %xmm1
+	vpmovzxbd	64(%r8), %xmm6
+	vpmovzxbd	68(%r8), %xmm7
+	vmovq	%rdx, %xmm4
+	shr		$3, %rcx
+	je,pn	7f
+
+	vlddqu		(%rsi), %xmm8
+	vlddqu		16(%rsi), %xmm9
+	add		$32, %rsi
+	/*	4cycle stall	*/
+	vpshufb		%xmm15, %xmm8, %xmm10	/*	swap 1st 4int byte order	*/
+	vpshufb		%xmm15, %xmm9, %xmm11	/*	swap 2nd 4int byte order	*/
+
 	dec		%rcx
-
-	vpshufb		%xmm10, %xmm12, %xmm2
-	vpshufb		%xmm11, %xmm12, %xmm3
-	vpand		%xmm15, %xmm0, %xmm4
-
-	vpand		%xmm15, %xmm1, %xmm5
-	vpand		%xmm15, %xmm2, %xmm6
-	je,pn	20f							/*	if only a pair of integers, bypass pair loop	*/
+	je,pn	80f
 
 	/*
-		xmm8 = {2, 3}, xmm9 = {0, 1}, xmm10 = {6, 7}, xmm11 = {4, 5}
-		xmm15 = {0x0102040810204080^2}
+		xmm12 = low nibble shuffle, xmm13 = high nibble shuffle, xmm14 = low nibble mask
+		xmm15 = byte swap shuffle
 	*/
 	.align	16
-2:
-	vmovq		(%rsi), %xmm12
-	add		$8, %rsi
-	vpcmpeqb	%xmm15, %xmm4, %xmm4
-	vpcmpeqb	%xmm15, %xmm5, %xmm5
+8:
+	vlddqu		(%rsi), %xmm8
+	vlddqu		16(%rsi), %xmm9
+		vpandn		%xmm10, %xmm14, %xmm0	/*	1st 4int high nibble	*/
+		vpand		%xmm10, %xmm14, %xmm2	/*	1st 4int low nibble	*/
+	add		$32, %rsi
 
-	vpmovmskb	%xmm4, %r8
-	vpcmpeqb	%xmm15, %xmm6, %xmm6
-	vpand		%xmm15, %xmm3, %xmm7
+		vpsrld		$4, %xmm0, %xmm0		/*	1st 4int high nibble shift to low	*/
+		vpandn		%xmm11, %xmm14, %xmm1	/*	2nd 4int high nibble	*/
+		vpand		%xmm11, %xmm14, %xmm3	/*	2nd 4int low nibble	*/
 
-	vpmovmskb	%xmm5, %r9
-	vpcmpeqb	%xmm15, %xmm7, %xmm7
-	add		$8, %rdi
+		vpsrld		$4, %xmm1, %xmm1		/*	2nd 4int high nibble shift to low	*/
+		vpshufb		%xmm0, %xmm13, %xmm0	/*	1st 4int high nibble reverse	*/
+		vpshufb		%xmm2, %xmm12, %xmm2	/*	1st 4int low nibble reverse	*/
 
-	vpmovmskb	%xmm6, %r10
-	mov		%r8w, -8(%rdi)
+		vpshufb		%xmm1, %xmm13, %xmm1	/*	2nd 4int high nibble reverse	*/
+		vpshufb		%xmm3, %xmm12, %xmm3	/*	2nd 4int low nibble reverse	*/
+		vpor		%xmm0, %xmm2, %xmm0		/*	1st bit reverse	*/		
 
-	vpmovmskb	%xmm7, %r11
-	vpshufb		%xmm8, %xmm12, %xmm0
-	vpshufb		%xmm9, %xmm12, %xmm1
-	mov		%r9w, -6(%rdi)
+		vmovdqu		%xmm0, (%rdi)
+		vpor		%xmm1, %xmm3, %xmm1		/*	2nd bit reverse	*/
+		add		$32, %rdi
 
-	vpshufb		%xmm10, %xmm12, %xmm2
-	vpshufb		%xmm11, %xmm12, %xmm3
-	vpand		%xmm15, %xmm0, %xmm4
-	mov		%r10w, -4(%rdi)
+	vpshufb		%xmm15, %xmm8, %xmm10		/*	swap 1st 4int byte order	*/
+	vpshufb		%xmm15, %xmm9, %xmm11		/*	swap 2nd 4int byte order	*/
+		vmovdqu		%xmm1, -16(%rdi)
+	dec		%rcx
+	jne,pt	8b
 
-	vpand		%xmm15, %xmm1, %xmm5
-	vpand		%xmm15, %xmm2, %xmm6
-	mov		%r11w, -2(%rdi)
-	sub		$1, %rcx
-	jne		2b
+80:
+		vpandn		%xmm10, %xmm14, %xmm0	/*	1st 4int high nibble	*/
+		vpand		%xmm10, %xmm14, %xmm2	/*	1st 4int low nibble	*/
 
-20:
-	vpcmpeqb	%xmm15, %xmm4, %xmm4
-	vpcmpeqb	%xmm15, %xmm5, %xmm5
-	vpand		%xmm15, %xmm3, %xmm7
+		vpsrld		$4, %xmm0, %xmm0		/*	1st 4int high nibble shift to low	*/
+		vpandn		%xmm11, %xmm14, %xmm1	/*	2nd 4int high nibble	*/
+		vpand		%xmm11, %xmm14, %xmm3	/*	2nd 4int low nibble	*/
 
-	vpmovmskb	%xmm4, %r8
-	vpcmpeqb	%xmm15, %xmm6, %xmm6
-	vpcmpeqb	%xmm15, %xmm7, %xmm7
+		vpsrld		$4, %xmm1, %xmm1		/*	2nd 4int high nibble shift to low	*/
+		vpshufb		%xmm0, %xmm13, %xmm0	/*	1st 4int high nibble reverse	*/
+		vpshufb		%xmm2, %xmm12, %xmm2	/*	1st 4int low nibble reverse	*/
 
-	vpmovmskb	%xmm5, %r9
+		vpshufb		%xmm1, %xmm13, %xmm1	/*	2nd 4int high nibble reverse	*/
+		vpshufb		%xmm3, %xmm12, %xmm3	/*	2nd 4int low nibble reverse	*/
+		vpor		%xmm0, %xmm2, %xmm0		/*	1st bit reverse	*/		
 
-	vpmovmskb	%xmm6, %r10
-	prefetchnta	128(%rsi)
-	mov		%r8w, (%rdi)
+		vmovdqu		%xmm0, (%rdi)
+		vpor		%xmm1, %xmm3, %xmm1		/*	2nd bit reverse	*/
 
-	vpmovmskb	%xmm7, %r11
-	mov		%r9w, 2(%rdi)
+		vmovdqu		%xmm1, 16(%rdi)
+		add		$32, %rdi
+7:
+	vpshufd		$0, %xmm4, %xmm4
 
-	mov		%r10w, 4(%rdi)
+	vpcmpgtd	%xmm6, %xmm4, %xmm6
+	vpcmpgtd	%xmm7, %xmm4, %xmm7
 
-	mov		%r11w, 6(%rdi)
-	add		$8, %rdi
+	vmaskmovps	(%rsi), %xmm6, %xmm8
+	vmaskmovps	16(%rsi), %xmm7, %xmm9
 
-1:
-	test	$1, %rdx
-	je,pt	0f
+	vpshufb		%xmm15, %xmm8, %xmm10		/*	swap 1st 4int byte order	*/
+	vpshufb		%xmm15, %xmm9, %xmm11		/*	swap 2nd 4int byte order	*/
 
-	movd	(%rsi), %xmm12
-	add		$4, %rsi
+		vpandn		%xmm10, %xmm14, %xmm0	/*	1st 4int high nibble	*/
+		vpand		%xmm10, %xmm14, %xmm2	/*	1st 4int low nibble	*/
 
-	vpshufb	%xmm8, %xmm12, %xmm0
-	vpshufb	%xmm9, %xmm12, %xmm1
+		vpsrld		$4, %xmm0, %xmm0		/*	1st 4int high nibble shift to low	*/
+		vpandn		%xmm11, %xmm14, %xmm1	/*	2nd 4int high nibble	*/
+		vpand		%xmm11, %xmm14, %xmm3	/*	2nd 4int low nibble	*/
 
-	vpand	%xmm15, %xmm0, %xmm4
-	vpand	%xmm15, %xmm1, %xmm5
+		vpsrld		$4, %xmm1, %xmm1		/*	2nd 4int high nibble shift to low	*/
+		vpshufb		%xmm0, %xmm13, %xmm0	/*	1st 4int high nibble reverse	*/
+		vpshufb		%xmm2, %xmm12, %xmm2	/*	1st 4int low nibble reverse	*/
 
-	vpcmpeqb	%xmm15, %xmm4, %xmm4
-	vpcmpeqb	%xmm15, %xmm5, %xmm5
+		vpshufb		%xmm1, %xmm13, %xmm1	/*	2nd 4int high nibble reverse	*/
+		vpshufb		%xmm3, %xmm12, %xmm3	/*	2nd 4int low nibble reverse	*/
+		vpor		%xmm0, %xmm2, %xmm0		/*	1st bit reverse	*/		
 
-	vpmovmskb	%xmm4, %r8
+		vmaskmovps		%xmm0, %xmm6, (%rdi)
+		vpor		%xmm1, %xmm3, %xmm1		/*	2nd bit reverse	*/
 
-	vpmovmskb	%xmm5, %r9
-
-	mov		%r8w, (%rdi)
-
-	mov		%r9w, 2(%rdi)
-	add		$4, %rdi
+		vmaskmovps		%xmm1, %xmm7, 16(%rdi)
 
 0:
 	retq
 	.size	reverse32Bit_AVX, .-reverse32Bit_AVX
 
-
-
+	.align	16
+lowNibbleShuffle:
+	.byte	0x00, 0x80, 0x40, 0xc0, 0x20, 0xa0, 0x60, 0xe0, 0x10, 0x90, 0x50, 0xd0, 0x30, 0xb0, 0x70, 0xf0
+highNibbleShuffle:
+	.byte	0x00, 0x08, 0x04, 0x0c, 0x02, 0x0a, 0x06, 0x0e, 0x01, 0x09, 0x05, 0x0d, 0x03, 0x0b, 0x07, 0x0f
+lowNibbleMask:
+	.fill	16, 1, 0x0f
+swapShuffle:
+	.byte	0x03, 0x02, 0x01, 0x00, 0x07, 0x06, 0x05, 0x04, 0x0b, 0x0a, 0x09, 0x08, 0x0f, 0x0e, 0x0d, 0x0c
+maskToCount:
+	.byte	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 
 	.align	16
 	.global	reverse32Bit_AVX2
 	.type	reverse32Bit_AVX2, %function
 	/*
 		void	reverse32Bit_AVX2(unsigned int* dest, const unsigned int* src, const unsigned int integerCount)
+
+		16int/6cycle sustained without actual memory performance issue
+		on i7-4650U@3.3GHz, 1e8 integers takes 0.0687sec, ~=11.65GB/s
 	*/
 reverse32Bit_AVX2:
 	prefetchnta	(%rsi)
-	lea		shuffleIndex(%rip), %r8
+	lea		lowNibbleShuffle(%rip), %r8
 	test	%rdx, %rdx
 	je,pn	0f
 
 	prefetchnta	64(%rsi)
-	vmovdqa		(%r8), %ymm9			/*	ymm9 = {0x04^8, 0x05^8, 0x06^8, 0x07^8}	*/
-	vmovdqa		32(%r8), %ymm15			/*	ymm15 = {0x0102040810204080^2}	*/
-	
-	vpermq		$0xff, %ymm9, %ymm14	/*	ymm14 = {0x04^16}	*/
+	vbroadcasti128	(%r8), %ymm12		/*	ymm12 = low nibble shuffle	*/
+	vbroadcasti128	16(%r8), %ymm13		/*	ymm13 = high nibble shuffle	*/
 	mov		%rdx, %rcx
 
-	vpsubb		%ymm14, %ymm9, %ymm8	/*	ymm8 = {0x00^8, 0x01^8, 0x02^8, 0x03^8}	*/
-	vpaddb		%ymm14, %ymm9, %ymm10	/*	ymm10 = {0x08^8, 0x09^8, 0x0a^8, 0x0b^8}	*/
+	vbroadcasti128	32(%r8), %ymm14		/*	ymm14 = low nibble mask	*/
+	vbroadcasti128	48(%r8), %ymm15		/*	ymm15 = byte swap shuffle	*/
+	and		$15, %rdx
 
-	vpaddb		%ymm14, %ymm10, %ymm11	/*	ymm11 = {0x0c^8, 0x0d^8, 0x0e^8, 0x0f^8}	*/
-	shr		$2, %rcx
-	je,pn	3f
+	vpmovzxbd	64(%r8), %ymm6
+	vpmovzxbd	72(%r8), %ymm7
+	vmovq	%rdx, %xmm4
+	shr		$4, %rcx
+	je,pn	15f
 
-41:	/*	first 4int	*/
-	vlddqu		(%rsi), %xmm12
-	add		$16, %rsi
+	vlddqu		(%rsi), %ymm8
+	vlddqu		32(%rsi), %ymm9
+	add		$64, %rsi
+	/*	4cycle stall	*/
+	vpshufb		%ymm15, %ymm8, %ymm10	/*	swap 1st 8int byte order	*/
 
-	vinserti128	$1, %xmm12, %ymm12, %ymm13
-	sub		$1, %rcx
-	je,pn	41f		/*	only first 4int */
+	vpshufb		%ymm15, %ymm9, %ymm11	/*	swap 2nd 8int byte order	*/
 
-42:	/*	second 4int	*/
-	vlddqu		(%rsi), %xmm12
-	add		$16, %rsi
-41:
-		vpshufb		%ymm8, %ymm13, %ymm0
-
-		vpshufb		%ymm9, %ymm13, %ymm1
-		vpand		%ymm15, %ymm0, %ymm4
-
-		vpshufb		%ymm10, %ymm13, %ymm2
-		vpcmpeqb	%ymm15, %ymm4, %ymm4
-		vpand		%ymm15, %ymm1, %ymm5
-
-		vpshufb		%ymm11, %ymm13, %ymm3
-		vpcmpeqb	%ymm15, %ymm5, %ymm5
-		vpand		%ymm15, %ymm2, %ymm6
-
-	vinserti128	$1, %xmm12, %ymm12, %ymm13	/*	useless step when only one 4-int	*/
-		vpcmpeqb	%ymm15, %ymm6, %ymm6
-		vpand		%ymm15, %ymm3, %ymm7
-
-		vpmovmskb	%ymm4, %r8
-		vpcmpeqb	%ymm15, %ymm7, %ymm7
-
-		vpmovmskb	%ymm5, %r9
-	je,pn	41f							/* if only 4int, use flag following previous load*/
-	sub		$1, %rcx
-	je,pn	42f
+	dec		%rcx
+	je,pn	160f
 
 	/*
-		ymm8 = {0, 1, 2, 3}, ymm9 = {4, 5, 6, 7}, ymm10 = {8, 9, a, b}, ymm11 = {c, d, e, f}
-		ymm15 = {0x0102040810204080^4}
+		xmm12 = low nibble shuffle, xmm13 = high nibble shuffle, xmm14 = low nibble mask
+		xmm15 = byte swap shuffle
 	*/
 	.align	16
-4:	/*	3 or more 4int	*/
-	vlddqu		(%rsi), %xmm12
-	add		$16, %rsi
-			vpmovmskb	%ymm6, %r10
-		vpshufb		%ymm8, %ymm13, %ymm0
-			mov			%r8d, (%rdi)
+16:
+	vlddqu		(%rsi), %ymm8
+	vlddqu		32(%rsi), %ymm9
+	add		$64, %rsi
+		vpandn		%ymm10, %ymm14, %ymm0	/*	1st 8int high nibble	*/
+		vpandn		%ymm11, %ymm14, %ymm1	/*	2nd 8int high nibble	*/
 
-			vpmovmskb	%ymm7, %r11
-		vpshufb		%ymm9, %ymm13, %ymm1
-		vpand		%ymm15, %ymm0, %ymm4
-			mov			%r9d, 4(%rdi)
+		vpsrld		$4, %ymm0, %ymm0		/*	1st 8int high nibble shift to low	*/
+		vpand		%ymm10, %ymm14, %ymm2	/*	1st 8int low nibble	*/
+		vpand		%ymm11, %ymm14, %ymm3	/*	2nd 8int low nibble	*/
 
-		vpshufb		%ymm10, %ymm13, %ymm2
-		vpcmpeqb	%ymm15, %ymm4, %ymm4
-		vpand		%ymm15, %ymm1, %ymm5
-			mov			%r10d, 8(%rdi)
+		vpsrld		$4, %ymm1, %ymm1		/*	2nd 8int high nibble shift to low	*/
+		vpshufb		%ymm0, %ymm13, %ymm0	/*	1st 8int high nibble reverse	*/
 
-		vpshufb		%ymm11, %ymm13, %ymm3
-		vpcmpeqb	%ymm15, %ymm5, %ymm5
-		vpand		%ymm15, %ymm2, %ymm6
-			mov			%r11d, 12(%rdi)
+		vpshufb		%ymm2, %ymm12, %ymm2	/*	1st 8int low nibble reverse	*/
 
-	vinserti128	$1, %xmm12, %ymm12, %ymm13
-		vpcmpeqb	%ymm15, %ymm6, %ymm6
-		vpand		%ymm15, %ymm3, %ymm7
+		vpshufb		%ymm1, %ymm13, %ymm1	/*	2nd 8int high nibble reverse	*/
+		vpor		%ymm0, %ymm2, %ymm0		/*	1st bit reverse	*/		
 
-		vpmovmskb	%ymm4, %r8
-		vpcmpeqb	%ymm15, %ymm7, %ymm7
-			add		$16, %rdi
+		vpshufb		%ymm3, %ymm12, %ymm3	/*	2nd 8int low nibble reverse	*/
+		vmovdqu		%ymm0, (%rdi)
 
-		vpmovmskb	%ymm5, %r9
-	sub		$1, %rcx
-	jne		4b
+	vpshufb		%ymm15, %ymm8, %ymm10		/*	swap 1st 8int byte order	*/
+		vpor		%ymm1, %ymm3, %ymm1		/*	2nd bit reverse	*/
 
-42:	/*	last two 4int under processing	*/
-			vpmovmskb	%ymm6, %r10
-		vpshufb		%ymm8, %ymm13, %ymm0
-			mov			%r8d, (%rdi)
+	vpshufb		%ymm15, %ymm9, %ymm11		/*	swap 2nd 8int byte order	*/
+		vmovdqu		%ymm1, 32(%rdi)
+		add		$64, %rdi
+	dec		%rcx
+	jne,pt	16b
 
-			vpmovmskb	%ymm7, %r11
-		vpshufb		%ymm9, %ymm13, %ymm1
-		vpand		%ymm15, %ymm0, %ymm4
-			mov			%r9d, 4(%rdi)
+160:
+		vpandn		%ymm10, %ymm14, %ymm0	/*	1st 8int high nibble	*/
+		vpandn		%ymm11, %ymm14, %ymm1	/*	2nd 8int high nibble	*/
 
-		vpshufb		%ymm10, %ymm13, %ymm2
-		vpcmpeqb	%ymm15, %ymm4, %ymm4
-		vpand		%ymm15, %ymm1, %ymm5
-			mov			%r10d, 8(%rdi)
+		vpsrld		$4, %ymm0, %ymm0		/*	1st 8int high nibble shift to low	*/
+		vpand		%ymm10, %ymm14, %ymm2	/*	1st 8int low nibble	*/
+		vpand		%ymm11, %ymm14, %ymm3	/*	2nd 8int low nibble	*/
 
-		vpshufb		%ymm11, %ymm13, %ymm3
-		vpcmpeqb	%ymm15, %ymm5, %ymm5
-		vpand		%ymm15, %ymm2, %ymm6
-			mov			%r11d, 12(%rdi)
+		vpsrld		$4, %ymm1, %ymm1		/*	2nd 8int high nibble shift to low	*/
+		vpshufb		%ymm0, %ymm13, %ymm0	/*	1st 8int high nibble reverse	*/
 
-		vpcmpeqb	%ymm15, %ymm6, %ymm6
-		vpand		%ymm15, %ymm3, %ymm7
-			add		$16, %rdi
+		vpshufb		%ymm2, %ymm12, %ymm2	/*	1st 8int low nibble reverse	*/
 
-		vpmovmskb	%ymm4, %r8
-		vpcmpeqb	%ymm15, %ymm7, %ymm7
+		vpshufb		%ymm1, %ymm13, %ymm1	/*	2nd 8int high nibble reverse	*/
+		vpor		%ymm0, %ymm2, %ymm0		/*	1st bit reverse	*/		
 
-		vpmovmskb	%ymm5, %r9
+		vpshufb		%ymm3, %ymm12, %ymm3	/*	2nd 8int low nibble reverse	*/
+		vmovdqu		%ymm0, (%rdi)
 
-41:	/*	last 4int to save	*/
-			vpmovmskb	%ymm6, %r10
-			mov			%r8d, (%rdi)
+		vpor		%ymm1, %ymm3, %ymm1		/*	2nd bit reverse	*/
 
-			vpmovmskb	%ymm7, %r11
-			mov			%r9d, 4(%rdi)
+		vmovdqu		%ymm1, 32(%rdi)
+		add		$64, %rdi
 
-			mov			%r10d, 8(%rdi)
+15:
+	vinserti128	$1, %xmm4, %ymm4, %ymm4
 
-			mov			%r11d, 12(%rdi)
-			add		$16, %rdi
+	vpshufd		$0, %ymm4, %ymm4
 
-3:
-	and		$3, %rdx
-	je,pn	0f
+	vpcmpgtd	%ymm6, %ymm4, %ymm6
+	vpcmpgtd	%ymm7, %ymm4, %ymm7
 
-1:
-	vpbroadcastd	(%rsi), %ymm12
-	add		$4, %rsi
+	vpmaskmovd	(%rsi), %ymm6, %ymm8
+	vpmaskmovd	32(%rsi), %ymm7, %ymm9
 
-	vpshufb		%ymm8, %ymm12, %ymm0
-	vpand		%ymm15, %ymm0, %ymm4
-	vpcmpeqb	%ymm15, %ymm4, %ymm4
-	vpmovmskb	%ymm4, %r8
-	mov			%r8d, (%rdi)
-	add		$4, %rdi
-	sub		$1, %rdx
-	jne,pt	1b
+	vpshufb		%ymm15, %ymm8, %ymm10		/*	swap 1st 8int byte order	*/
+	vpshufb		%ymm15, %ymm9, %ymm11		/*	swap 2nd 8int byte order	*/
+
+		vpandn		%ymm10, %ymm14, %ymm0	/*	1st 8int high nibble	*/
+		vpandn		%ymm11, %ymm14, %ymm1	/*	2nd 8int high nibble	*/
+
+		vpsrld		$4, %ymm0, %ymm0		/*	1st 8int high nibble shift to low	*/
+		vpand		%ymm10, %ymm14, %ymm2	/*	1st 8int low nibble	*/
+		vpand		%ymm11, %ymm14, %ymm3	/*	2nd 8int low nibble	*/
+
+		vpsrld		$4, %ymm1, %ymm1		/*	2nd 8int high nibble shift to low	*/
+		vpshufb		%ymm0, %ymm13, %ymm0	/*	1st 8int high nibble reverse	*/
+
+		vpshufb		%ymm2, %ymm12, %ymm2	/*	1st 8int low nibble reverse	*/
+
+		vpshufb		%ymm1, %ymm13, %ymm1	/*	2nd 8int high nibble reverse	*/
+		vpor		%ymm0, %ymm2, %ymm0		/*	1st bit reverse	*/		
+
+		vpshufb		%ymm3, %ymm12, %ymm3	/*	2nd 8int low nibble reverse	*/
+		vpmaskmovd	%ymm0, %ymm6, (%rdi)
+
+		vpor		%ymm1, %ymm3, %ymm1		/*	2nd bit reverse	*/
+
+		vpmaskmovd	%ymm1, %ymm7, 32(%rdi)
 
 0:
 	retq
 	.size	reverse32Bit_AVX2, .-reverse32Bit_AVX2
-
-	.align	64
-shuffleIndex:
-	.fill	8, 1, 0x7
-	.fill	8, 1, 0x6
-	.fill	8, 1, 0x5
-	.fill	8, 1, 0x4
-reverseMask:
-	.rep	4
-	.quad	0x0102040810204080
-	.endr
